@@ -11,9 +11,9 @@ importlib_req = ['importlib'] if sys.version_info < (2,7) else []
 
 setup_params = dict(
     name="irc",
+    version=open("VERSION").read().strip(),
     description="IRC (Internet Relay Chat) protocol client library for Python",
     long_description=read_long_description(),
-    use_hg_version=True,
     packages=setuptools.find_packages(),
     author="Joel Rosdahl",
     author_email="joel@rosdahl.net",
