@@ -506,6 +506,13 @@ class LineBuffer(object):
     >>> b.feed(b'Ol\xe9\n')
     >>> list(b.lines())
     ['Ol\xe9']
+
+    The LineBuffer should also act as an iterable.
+    >>> b.feed('iterate\nthis\n')
+    >>> for line in b:
+    ...    print(line)
+    iterate
+    this
     """
     line_sep_exp = re.compile(b'\r?\n')
 
@@ -519,7 +526,7 @@ class LineBuffer(object):
         lines = self.line_sep_exp.split(self.buffer)
         # save the last, unfinished, possibly empty line
         self.buffer = lines.pop()
-        return lines
+        return iter(lines)
 
     def __iter__(self):
         return self.lines()
@@ -607,7 +614,7 @@ class ServerConnection(Connection):
             warnings.warn("localaddress, localport, ssl, and ipv6 parameters "
                 "are deprecated. Use connect_factory instead.",
                 DeprecationWarning)
-            connect_factory.use_legacy_params(localaddress, localport, ssl,
+            connect_factory.from_legacy_params(localaddress, localport, ssl,
                 ipv6)
 
         if self.connected:
@@ -984,7 +991,7 @@ class ServerConnection(Connection):
         # According to the RFC http://tools.ietf.org/html/rfc2812#page-6,
         # clients should not transmit more than 512 bytes.
         if len(bytes) > 512:
-            raise ValueError("Messages limited to 512 bytes")
+            raise ValueError("Messages limited to 512 bytes including CR/LF")
         if self.socket is None:
             raise ServerNotConnectedError("Not connected.")
         sender = getattr(self.socket, 'write', self.socket.send)

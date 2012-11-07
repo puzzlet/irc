@@ -1,3 +1,5 @@
+from __future__ import division
+
 # from jaraco.util.itertools
 def always_iterable(item):
     """

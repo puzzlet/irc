@@ -44,7 +44,8 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
     have operator or voice modes.  The "database" is kept in the
     self.channels attribute, which is an IRCDict of Channels.
     """
-    def __init__(self, server_list, nickname, realname, reconnection_interval=60):
+    def __init__(self, server_list, nickname, realname, reconnection_interval=60,
+            **connect_params):
         """Constructor for SingleServerIRCBot objects.
 
         Arguments:
@@ -62,9 +63,13 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
 
             dcc_connections -- A list of initiated/accepted DCC
             connections.
+
+            **connect_params -- parameters to pass through to the connect
+                                method.
         """
 
         super(SingleServerIRCBot, self).__init__()
+        self.__connect_params = connect_params
         self.channels = IRCDict()
         self.server_list = server_list
         if not reconnection_interval or reconnection_interval < 0:
@@ -96,7 +101,9 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
                          self.server_list[0][1],
                          self._nickname,
                          password,
-                         ircname=self._realname)
+                         ircname=self._realname,
+                         **self.__connect_params
+            )
         except irc.client.ServerConnectionError:
             pass
 

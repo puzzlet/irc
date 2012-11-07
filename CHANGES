@@ -1,3 +1,21 @@
+3.5
+===
+
+* SingleServerIRCBot now accepts keyword arguments which are passed through
+  to the `ServerConnection.connect` method. One can use this to use SSL for
+  connections::
+
+    factory = irc.connection.Factory(wrapper=ssl.wrap_socket)
+    bot = irc.bot.SingleServerIRCBot(..., connect_factory = factory)
+
+
+3.4.2
+=====
+
+* Issue #6: Fix AttributeError when legacy parameters are passed to
+  `ServerConnection.connect`.
+* Issue #7: Fix TypeError on `iter(LineBuffer)`.
+
 3.4.1
 =====
 
@@ -5,7 +23,8 @@
 implemented and never tested.
 
 * The ServerConnection now allows custom classes to be supplied to customize
-  the decoding of incoming lines. For example, to disable the decoding of incoming lines,
+  the decoding of incoming lines. For example, to disable the decoding of
+  incoming lines,
   replace the `buffer_class` on the ServerConnection with a version that
   passes through the lines directly::
 
