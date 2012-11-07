@@ -29,12 +29,9 @@ setup_params = dict(
     ],
     install_requires=[
     ] + importlib_req,
-    setup_requires=[
-        'hgtools',
-        'pytest-runner',
-    ],
     tests_require=[
         'pytest',
+        'pytest-runner',
     ],
     use_2to3=True,
     use_2to3_exclude_fixers=[

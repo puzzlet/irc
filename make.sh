@@ -1,6 +1,6 @@
 #!/bin/bash -x
 PKG_NAME=python-irc
-VER=`git describe --tag`
+VER=`git describe --tag --abbrev=0`
 DEB_VER=0build`date --utc +%Y%m%d%H%M`utc
 
 echo $VER > VERSION
@@ -17,4 +17,4 @@ cd deb_dist/irc-$VER
 debuild -uc -us
 cd -
 
-echo "Debian package created: deb_dist/$PKG_NAME_$VER-${DEB_VER}_all.deb"
+echo "Debian package created: deb_dist/${PKG_NAME}_$VER-${DEB_VER}_all.deb"
