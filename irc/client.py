@@ -2,22 +2,6 @@
 
 # Copyright (C) 1999-2002  Joel Rosdahl
 # Copyright © 2011-2012 Jason R. Coombs
-#
-# This library is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License as published by the Free Software Foundation; either
-# version 2.1 of the License, or (at your option) any later version.
-#
-# This library is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
-#
-# keltus <keltus@users.sourceforge.net>
 
 """
 Internet Relay Chat (IRC) protocol client library.
@@ -71,24 +55,26 @@ import select
 import socket
 import string
 import time
-import warnings
-import datetime
 import struct
 import logging
 import itertools
 import threading
+import abc
+import collections
+import functools
 
 try:
     import pkg_resources
 except ImportError:
     pass
 
-from . import functools as irc_functools
-from . import events
-from . import util
-from . import strings
-from . import modes
 from . import connection
+from . import events
+from . import functools as irc_functools
+from . import strings
+from . import util
+from . import buffer
+from . import schedule
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +102,14 @@ except Exception:
 class IRCError(Exception):
     "An IRC exception"
 
+class InvalidCharacters(ValueError):
+    "Invalid characters were encountered in the message"
+
+class MessageTooLong(ValueError):
+    "Message is too long"
+
+PrioritizedHandler = collections.namedtuple('PrioritizedHandler',
+    ('priority', 'callback'))
 
 class IRC(object):
     """Class that handles one or several IRC server connections.
@@ -149,23 +143,24 @@ class IRC(object):
     are guarded by a mutex.
     """
 
-    def __init__(self, fn_to_add_socket=None,
-                 fn_to_remove_socket=None,
-                 fn_to_add_timeout=None):
+    def __do_nothing(*args, **kwargs):
+        pass
+
+    def __init__(self, on_connect=__do_nothing, on_disconnect=__do_nothing,
+            on_schedule=__do_nothing):
         """Constructor for IRC objects.
 
-        Optional arguments are fn_to_add_socket, fn_to_remove_socket
-        and fn_to_add_timeout.  The first two specify functions that
-        will be called with a socket object as argument when the IRC
-        object wants to be notified (or stop being notified) of data
-        coming on a new socket.  When new data arrives, the method
-        process_data should be called.  Similarly, fn_to_add_timeout
-        is called with a number of seconds (a floating point number)
-        as first argument when the IRC object wants to receive a
-        notification (by calling the process_timeout method).  So, if
-        e.g. the argument is 42.17, the object wants the
-        process_timeout method to be called after 42 seconds and 170
-        milliseconds.
+        on_connect: optional callback invoked when a new connection
+        is made.
+
+        on_disconnect: optional callback invoked when a socket is
+        disconnected.
+
+        on_schedule: optional callback, usually supplied by an external
+        event loop, to indicate in float seconds that the client needs to
+        process events that many seconds in the future. An external event
+        loop will implement this callback to schedule a call to
+        process_timeout.
 
         The three arguments mainly exist to be able to use an external
         main loop (for example Tkinter's or PyGTK's main app loop)
@@ -175,14 +170,10 @@ class IRC(object):
         once in a while.
         """
 
-        if fn_to_add_socket and fn_to_remove_socket:
-            self.fn_to_add_socket = fn_to_add_socket
-            self.fn_to_remove_socket = fn_to_remove_socket
-        else:
-            self.fn_to_add_socket = None
-            self.fn_to_remove_socket = None
+        self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
+        self._on_schedule = on_schedule
 
-        self.fn_to_add_timeout = fn_to_add_timeout
         self.connections = []
         self.handlers = {}
         self.delayed_commands = []  # list of DelayedCommands
@@ -211,7 +202,7 @@ class IRC(object):
         with self.mutex:
             log.log(logging.DEBUG-2, "process_data()")
             for s, c in itertools.product(sockets, self.connections):
-                if s == c._get_socket():
+                if s == c.socket:
                     c.process_data()
 
     def process_timeout(self):
@@ -224,8 +215,8 @@ class IRC(object):
                 command = self.delayed_commands[0]
                 if not command.due():
                     break
-                command.function(*command.arguments)
-                if isinstance(command, PeriodicCommand):
+                command.function()
+                if isinstance(command, schedule.PeriodicCommand):
                     self._schedule_command(command.next())
                 del self.delayed_commands[0]
 
@@ -243,7 +234,8 @@ class IRC(object):
         """
         with self.mutex:
             log.log(logging.DEBUG-2, "process_once()")
-            sockets = [x._get_socket() for x in self.connections if x is not None]
+            sockets = [x.socket for x in self.connections if x is not None]
+            sockets = [x for x in sockets if x is not None]
             if sockets:
                 (i, o, e) = select.select(sockets, [], [], timeout)
                 self.process_data(i)
@@ -279,9 +271,10 @@ class IRC(object):
         Arguments:
 
             event -- Event type (a string).  Check the values of
-            numeric_events for possible event types.
+                     numeric_events for possible event types.
 
-            handler -- Callback function.
+            handler -- Callback function taking 'connection' and 'event'
+                       parameters.
 
             priority -- A number (the lower number, the higher priority).
 
@@ -293,9 +286,10 @@ class IRC(object):
         number is highest priority).  If a handler function returns
         "NO MORE", no more handlers will be called.
         """
+        handler = PrioritizedHandler(priority, handler)
         with self.mutex:
             event_handlers = self.handlers.setdefault(event, [])
-            bisect.insort(event_handlers, (priority, handler))
+            bisect.insort(event_handlers, handler)
 
     def remove_global_handler(self, event, handler):
         """Removes a global handler function.
@@ -311,7 +305,7 @@ class IRC(object):
             if not event in self.handlers:
                 return 0
             for h in self.handlers[event]:
-                if handler == h[1]:
+                if handler == h.callback:
                     self.handlers[event].remove(h)
         return 1
 
@@ -324,7 +318,8 @@ class IRC(object):
             function -- Function to call.
             arguments -- Arguments to give the function.
         """
-        command = DelayedCommand.at_time(at, function, arguments)
+        function = functools.partial(function, *arguments)
+        command = schedule.DelayedCommand.at_time(at, function)
         self._schedule_command(command)
 
     def execute_delayed(self, delay, function, arguments=()):
@@ -335,7 +330,8 @@ class IRC(object):
         function -- Function to call.
         arguments -- Arguments to give the function.
         """
-        command = DelayedCommand(delay, function, arguments)
+        function = functools.partial(function, *arguments)
+        command = schedule.DelayedCommand.after(delay, function)
         self._schedule_command(command)
 
     def execute_every(self, period, function, arguments=()):
@@ -346,14 +342,14 @@ class IRC(object):
         function -- Function to call.
         arguments -- Arguments to give the function.
         """
-        command = PeriodicCommand(period, function, arguments)
+        function = functools.partial(function, *arguments)
+        command = schedule.PeriodicCommand.after(period, function)
         self._schedule_command(command)
 
     def _schedule_command(self, command):
         with self.mutex:
             bisect.insort(self.delayed_commands, command)
-            if self.fn_to_add_timeout:
-                self.fn_to_add_timeout(util.total_seconds(command.delay))
+            self._on_schedule(util.total_seconds(command.delay))
 
     def dcc(self, dcctype="chat"):
         """Creates and returns a DCCConnection object.
@@ -371,95 +367,40 @@ class IRC(object):
         return c
 
     def _handle_event(self, connection, event):
-        """[Internal]"""
+        """
+        Handle an Event event incoming on ServerConnection connection.
+        """
         with self.mutex:
             h = self.handlers
-            th = sorted(h.get("all_events", []) + h.get(event.eventtype(), []))
-            for handler in th:
-                if handler[1](connection, event) == "NO MORE":
+            matching_handlers = sorted(
+                h.get("all_events", []) +
+                h.get(event.type, [])
+            )
+            for handler in matching_handlers:
+                result = handler.callback(connection, event)
+                if result == "NO MORE":
                     return
 
     def _remove_connection(self, connection):
         """[Internal]"""
         with self.mutex:
             self.connections.remove(connection)
-            if self.fn_to_remove_socket:
-                self.fn_to_remove_socket(connection._get_socket())
-
-class DelayedCommand(datetime.datetime):
-    """
-    A command to be executed after some delay (seconds or timedelta).
-
-    Clients may override .now() to have dates interpreted in a different
-    manner, such as to use UTC or to have timezone-aware times.
-    """
-    def __new__(cls, delay, function, arguments):
-        if not isinstance(delay, datetime.timedelta):
-            delay = datetime.timedelta(seconds=delay)
-        at = cls.now() + delay
-        cmd = datetime.datetime.__new__(cls, at.year,
-            at.month, at.day, at.hour, at.minute, at.second,
-            at.microsecond, at.tzinfo)
-        cmd.delay = delay
-        cmd.function = function
-        cmd.arguments = arguments
-        return cmd
-
-    @classmethod
-    def now(self, tzinfo=None):
-        return datetime.datetime.now(tzinfo)
-
-    @classmethod
-    def at_time(cls, at, function, arguments):
-        """
-        Construct a DelayedCommand to come due at `at`, where `at` may be
-        a datetime or timestamp. If `at` is a timestamp, it will be
-        interpreted as a naive local timestamp.
-        """
-        if isinstance(at, int):
-            at = datetime.datetime.fromtimestamp(at)
-        delay = at - cls.now()
-        return cls(delay, function, arguments)
-
-    def due(self):
-        return self.now() >= self
-
-class PeriodicCommand(DelayedCommand):
-    """
-    Like a deferred command, but expect this command to run every delay
-    seconds.
-    """
-    def next(self):
-        return PeriodicCommand(self.delay, self.function,
-            self.arguments)
-
-class PeriodicCommandFixedDelay(PeriodicCommand):
-    """
-    Like a periodic command, but don't calculate the delay based on
-    the current time. Instead use a fixed delay following the initial
-    run.
-    """
-    @classmethod
-    def at_time(cls, at, delay, function, arguments):
-        cmd = super(PeriodicCommandFixedDelay, cls).at_time(
-            at, function, arguments)
-        if not isinstance(delay, datetime.timedelta):
-            delay = datetime.timedelta(seconds=delay)
-        cmd.delay = delay
-        return cmd
+            self._on_disconnect(connection.socket)
 
 _rfc_1459_command_regexp = re.compile("^(:(?P<prefix>[^ ]+) +)?(?P<command>[^ ]+)( *(?P<argument> .+))?")
 
 class Connection(object):
-    """Base class for IRC connections.
-
-    Must be overridden.
     """
+    Base class for IRC connections.
+    """
+    __metaclass__ = abc.ABCMeta
+
+    @abc.abstractproperty
+    def socket(self):
+        "The socket for this connection"
+
     def __init__(self, irclibobj):
         self.irclibobj = irclibobj
-
-    def _get_socket():
-        raise IRCError("Not overridden")
 
     ##############################
     ### Convenience wrappers.
@@ -480,89 +421,6 @@ class ServerNotConnectedError(ServerConnectionError):
     pass
 
 
-class LineBuffer(object):
-    r"""
-    Buffer bytes read in from a connection and serve complete lines back.
-
-    >>> b = LineBuffer()
-    >>> len(b)
-    0
-
-    >>> b.feed(b'foo\nbar')
-    >>> len(b)
-    7
-    >>> list(b.lines())
-    ['foo']
-    >>> len(b)
-    3
-
-    >>> b.feed(b'bar\r\nbaz\n')
-    >>> list(b.lines())
-    ['barbar', 'baz']
-    >>> len(b)
-    0
-
-    The buffer will not perform any decoding.
-    >>> b.feed(b'Ol\xe9\n')
-    >>> list(b.lines())
-    ['Ol\xe9']
-
-    The LineBuffer should also act as an iterable.
-    >>> b.feed('iterate\nthis\n')
-    >>> for line in b:
-    ...    print(line)
-    iterate
-    this
-    """
-    line_sep_exp = re.compile(b'\r?\n')
-
-    def __init__(self):
-        self.buffer = b''
-
-    def feed(self, bytes):
-        self.buffer += bytes
-
-    def lines(self):
-        lines = self.line_sep_exp.split(self.buffer)
-        # save the last, unfinished, possibly empty line
-        self.buffer = lines.pop()
-        return iter(lines)
-
-    def __iter__(self):
-        return self.lines()
-
-    def __len__(self):
-        return len(self.buffer)
-
-class DecodingLineBuffer(LineBuffer):
-    r"""
-    Like LineBuffer, but decode the output (default assumes UTF-8).
-
-    >>> b = DecodingLineBuffer()
-    >>> b.feed(b'bar\r\nbaz\nOl\xc3\xa9\n')
-    >>> list(b.lines())
-    [u'bar', u'baz', u'Ol\xe9']
-    >>> len(b)
-    0
-
-    Some clients will feed latin-1 or other encodings. If your client should
-    support docoding from these clients (and not raise a UnicodeDecodeError),
-    set errors='replace':
-
-    >>> rb = DecodingLineBuffer()
-    >>> b.errors = 'replace'
-    >>> b.feed(b'Ol\xe9\n')
-    >>> list(b.lines())
-    [u'Ol\ufffd']
-    """
-    encoding = 'utf-8'
-    errors = 'strict'
-
-    def lines(self):
-        return (line.decode(self.encoding, self.errors)
-            for line in super(DecodingLineBuffer, self).lines())
-
-
 class ServerConnection(Connection):
     """
     An IRC server connection.
@@ -571,18 +429,17 @@ class ServerConnection(Connection):
     method on an IRC object.
     """
 
-    buffer_class = DecodingLineBuffer
+    buffer_class = buffer.DecodingLineBuffer
+    socket = None
 
     def __init__(self, irclibobj):
         super(ServerConnection, self).__init__(irclibobj)
         self.connected = False
-        self.socket = None
 
     # save the method args to allow for easier reconnection.
     @irc_functools.save_method_args
     def connect(self, server, port, nickname, password=None, username=None,
-            ircname=None, localaddress="", localport=0, ssl=False, ipv6=False,
-            connect_factory=connection.Factory()):
+            ircname=None, connect_factory=connection.Factory()):
         """Connect/reconnect to a server.
 
         Arguments:
@@ -597,25 +454,12 @@ class ServerConnection(Connection):
             connect_factory -- A callable that takes the server address and
                 returns a connection (with a socket interface).
 
-        Deprecated Arguments:
-            localaddress -- Bind the connection to a specific local IP address.
-            localport -- Bind the connection to a specific local port.
-            ssl -- Enable support for ssl.
-            ipv6 -- Enable support for ipv6.
-
         This function can be called to reconnect a closed connection.
 
         Returns the ServerConnection object.
         """
         log.debug("connect(server=%r, port=%r, nickname=%r, ...)", server,
             port, nickname)
-
-        if localaddress or localport or ssl or ipv6:
-            warnings.warn("localaddress, localport, ssl, and ipv6 parameters "
-                "are deprecated. Use connect_factory instead.",
-                DeprecationWarning)
-            connect_factory.from_legacy_params(localaddress, localport, ssl,
-                ipv6)
 
         if self.connected:
             self.disconnect("Changing servers")
@@ -635,11 +479,9 @@ class ServerConnection(Connection):
         try:
             self.socket = self.connect_factory(self.server_address)
         except socket.error as err:
-            self.socket = None
             raise ServerConnectionError("Couldn't connect to socket: %s" % err)
         self.connected = True
-        if self.irclibobj.fn_to_add_socket:
-            self.irclibobj.fn_to_add_socket(self.socket)
+        self.irclibobj._on_connect(self.socket)
 
         # Log on...
         if self.password:
@@ -666,10 +508,6 @@ class ServerConnection(Connection):
             self.disconnect("Closing object")
             self.irclibobj._remove_connection(self)
 
-    def _get_socket(self):
-        """[Internal]"""
-        return self.socket
-
     def get_server_name(self):
         """Get the (real) server name.
 
@@ -692,7 +530,7 @@ class ServerConnection(Connection):
         return self.real_nickname
 
     def process_data(self):
-        """[Internal]"""
+        "read and process input from self.socket"
 
         try:
             reader = getattr(self.socket, 'read', self.socket.recv)
@@ -738,8 +576,7 @@ class ServerConnection(Connection):
                     arguments.append(a[1])
 
             # Translate numerics into more readable strings.
-            if command in numeric_events:
-                command = numeric_events[command]
+            command = events.numeric.get(command, command)
 
             if command == "nick":
                 if NickMask(prefix).nick == self.real_nickname:
@@ -801,8 +638,8 @@ class ServerConnection(Connection):
     def _handle_event(self, event):
         """[Internal]"""
         self.irclibobj._handle_event(self, event)
-        if event.eventtype() in self.handlers:
-            for fn in self.handlers[event.eventtype()]:
+        if event.type in self.handlers:
+            for fn in self.handlers[event.type]:
                 fn(self, event)
 
     def is_connected(self):
@@ -834,6 +671,45 @@ class ServerConnection(Connection):
         """Send an ADMIN command."""
         self.send_raw(" ".join(["ADMIN", server]).strip())
 
+    def cap(self, subcommand, *args):
+        """
+        Send a CAP command according to `the spec
+        <http://ircv3.atheme.org/specification/capability-negotiation-3.1>`_.
+
+        Arguments:
+
+            subcommand -- LS, LIST, REQ, ACK, CLEAR, END
+            args -- capabilities, if required for given subcommand
+
+        Example:
+
+            .cap('LS')
+            .cap('REQ', 'multi-prefix', 'sasl')
+            .cap('END')
+        """
+        cap_subcommands = set('LS LIST REQ ACK NAK CLEAR END'.split())
+        client_subcommands = set(cap_subcommands) - set('NAK')
+        assert subcommand in client_subcommands, "invalid subcommand"
+
+        def _multi_parameter(args):
+            """
+            According to the spec::
+
+                If more than one capability is named, the RFC1459 designated
+                sentinel (:) for a multi-parameter argument must be present.
+
+            It's not obvious where the sentinel should be present or if it must
+            be omitted for a single parameter, so follow convention and only
+            include the sentinel prefixed to the first parameter if more than
+            one parameter is present.
+            """
+            if len(args) > 1:
+                return (':' + args[0],) + args[1:]
+            return args
+
+        args = _multi_parameter(args)
+        self.send_raw(' '.join(('CAP', subcommand) + args))
+
     def ctcp(self, ctcptype, target, parameter=""):
         """Send a CTCP command."""
         ctcptype = ctcptype.upper()
@@ -862,7 +738,7 @@ class ServerConnection(Connection):
             self.socket.close()
         except socket.error:
             pass
-        self.socket = None
+        del self.socket
         self._handle_event(Event("disconnect", self.server, "", [message]))
 
     def globops(self, text):
@@ -986,12 +862,14 @@ class ServerConnection(Connection):
         # The string should not contain any carriage return other than the
         # one added here.
         if '\n' in string:
-            raise ValueError("Carriage returns not allowed in privmsg(text)")
+            raise InvalidCharacters(
+                "Carriage returns not allowed in privmsg(text)")
         bytes = string.encode('utf-8') + b'\r\n'
         # According to the RFC http://tools.ietf.org/html/rfc2812#page-6,
         # clients should not transmit more than 512 bytes.
         if len(bytes) > 512:
-            raise ValueError("Messages limited to 512 bytes including CR/LF")
+            raise MessageTooLong(
+                "Messages limited to 512 bytes including CR/LF")
         if self.socket is None:
             raise ServerNotConnectedError("Not connected.")
         sender = getattr(self.socket, 'write', self.socket.send)
@@ -1069,6 +947,8 @@ class DCCConnection(Connection):
     DCCConnection objects are instantiated by calling the dcc
     method on an IRC object.
     """
+    socket = None
+
     def __init__(self, irclibobj, dcctype):
         super(DCCConnection, self).__init__(irclibobj)
         self.connected = 0
@@ -1089,7 +969,6 @@ class DCCConnection(Connection):
         """
         self.peeraddress = socket.gethostbyname(address)
         self.peerport = port
-        self.socket = None
         self.buffer = LineBuffer()
         self.handlers = {}
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1099,8 +978,7 @@ class DCCConnection(Connection):
         except socket.error as x:
             raise DCCConnectionError("Couldn't connect to socket: %s" % x)
         self.connected = 1
-        if self.irclibobj.fn_to_add_socket:
-            self.irclibobj.fn_to_add_socket(self.socket)
+        self.irclibobj._on_connect(self.socket)
         return self
 
     def listen(self):
@@ -1141,7 +1019,7 @@ class DCCConnection(Connection):
             self.socket.close()
         except socket.error:
             pass
-        self.socket = None
+        del self.socket
         self.irclibobj._handle_event(
             self,
             Event("dcc_disconnect", self.peeraddress, "", [message]))
@@ -1197,10 +1075,6 @@ class DCCConnection(Connection):
                 self,
                 Event(command, prefix, target, arguments))
 
-    def _get_socket(self):
-        """[Internal]"""
-        return self.socket
-
     def privmsg(self, string):
         """Send data to DCC peer.
 
@@ -1245,13 +1119,15 @@ class SimpleIRCClient(object):
         self.ircobj.add_global_handler("all_events", self._dispatcher, -10)
         self.ircobj.add_global_handler("dcc_disconnect", self._dcc_disconnect, -10)
 
-    def _dispatcher(self, c, e):
-        """[Internal]"""
-        log.debug("_dispatcher: %s", e.eventtype())
+    def _dispatcher(self, connection, event):
+        """
+        Dispatch events to on_<event.type> method, if present.
+        """
+        log.debug("_dispatcher: %s", event.type)
 
-        m = "on_" + e.eventtype()
-        if hasattr(self, m):
-            getattr(self, m)(c, e)
+        do_nothing = lambda c, e: None
+        method = getattr(self, "on_" + event.type, do_nothing)
+        method(connection, event)
 
     def _dcc_disconnect(self, c, e):
         self.dcc_connections.remove(c)
@@ -1292,43 +1168,27 @@ class SimpleIRCClient(object):
 
 
 class Event(object):
-    """Class representing an IRC event."""
-    def __init__(self, eventtype, source, target, arguments=None):
-        """Constructor of Event objects.
+    "An IRC event."
+    def __init__(self, type, source, target, arguments=None):
+        """
+        Constructor of Event objects.
 
         Arguments:
 
-            eventtype -- A string describing the event.
+            type -- A string describing the event.
 
             source -- The originator of the event (a nick mask or a server).
 
             target -- The target of the event (a nick or a channel).
 
-            arguments -- Any event specific arguments.
+            arguments -- Any event-specific arguments.
         """
-        self._eventtype = eventtype
-        self._source = source
-        self._target = target
-        if arguments:
-            self._arguments = arguments
-        else:
-            self._arguments = []
-
-    def eventtype(self):
-        """Get the event type."""
-        return self._eventtype
-
-    def source(self):
-        """Get the event source."""
-        return self._source
-
-    def target(self):
-        """Get the event target."""
-        return self._target
-
-    def arguments(self):
-        """Get the event arguments."""
-        return self._arguments
+        self.type = type
+        self.source = source
+        self.target = target
+        if arguments is None:
+            arguments = []
+        self.arguments = arguments
 
 _LOW_LEVEL_QUOTE = "\020"
 _CTCP_LEVEL_QUOTE = "\134"
@@ -1432,7 +1292,7 @@ def ip_numstr_to_quad(num):
     >>> ip_numstr_to_quad(3232235521)
     '192.168.0.1'
     """
-    n = long(num)
+    n = int(num)
     packed = struct.pack('>L', n)
     bytes = struct.unpack('BBBB', packed)
     return ".".join(map(str, bytes))
@@ -1445,7 +1305,7 @@ def ip_quad_to_numstr(quad):
     >>> ip_quad_to_numstr('192.168.0.1')
     '3232235521'
     """
-    bytes = map(long, quad.split("."))
+    bytes = map(int, quad.split("."))
     packed = struct.pack('BBBB', *bytes)
     return str(struct.unpack('>L', packed)[0])
 
@@ -1453,6 +1313,10 @@ class NickMask(str):
     """
     A nickmask (the source of an Event)
     """
+    @classmethod
+    def from_params(cls, nick, user, host):
+        return cls('{nick}!{user}@{host}'.format(**vars()))
+
     @property
     def nick(self):
         return self.split("!")[0]
@@ -1469,23 +1333,10 @@ class NickMask(str):
     def user(self):
         return self.userhost.split("@"[0])
 
-# for backward compatibility
-def nm_to_n(s): return NickMask(s).nick
-def nm_to_uh(s): return NickMask(s).userhost
-def nm_to_h(s): return NickMask(s).host
-def nm_to_u(s): return NickMask(s).user
-
 def _ping_ponger(connection, event):
     "A global handler for the 'ping' event"
-    connection.pong(event.target())
+    connection.pong(event.target)
 
 # for backward compatibility
-parse_nick_modes = modes.parse_nick_modes
-parse_channel_modes = modes.parse_channel_modes
-
-generated_events = events.generated
-protocol_events = events.protocol
-numeric_events = events.numeric
-all_events = events.all
-
-irc_lower = strings.lower
+LineBuffer = buffer.LineBuffer
+DecodingLineBuffer = buffer.DecodingLineBuffer

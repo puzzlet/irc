@@ -3,11 +3,14 @@ import sys
 import setuptools
 
 def read_long_description():
-    with open('README') as f:
+    with open('README.rst') as f:
         data = f.read()
+    with open('CHANGES.rst') as f:
+        data += '\n\n' + f.read()
     return data
 
 importlib_req = ['importlib'] if sys.version_info < (2,7) else []
+argparse_req = ['argparse'] if sys.version_info < (2,7) else []
 
 setup_params = dict(
     name="irc",
@@ -20,6 +23,7 @@ setup_params = dict(
     maintainer="Jason R. Coombs",
     maintainer_email="jaraco@jaraco.com",
     url="http://python-irclib.sourceforge.net",
+    license="MIT",
     classifiers = [
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
@@ -28,10 +32,13 @@ setup_params = dict(
         "Programming Language :: Python :: 3",
     ],
     install_requires=[
-    ] + importlib_req,
+    ] + importlib_req + argparse_req,
+    setup_requires=[
+        'pytest-runner',
+    ],
     tests_require=[
         'pytest',
-        'pytest-runner',
+        'mock',
     ],
     use_2to3=True,
     use_2to3_exclude_fixers=[

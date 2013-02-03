@@ -3,8 +3,10 @@ from __future__ import absolute_import, unicode_literals
 import re
 import string
 
+from . import _py2_compat
+
 # from jaraco.util.string
-class FoldedCase(unicode):
+class FoldedCase(_py2_compat.str):
     """
     A case insensitive string class; behaves just like str
     except compares equal when the only variation is case.
@@ -19,11 +21,12 @@ class FoldedCase(unicode):
     >>> s.index('O')
     4
 
-    >>> s.split('O')
-    [u'hell', u' w', u'rld']
+    >>> s.split('O') == ['hell', ' w', 'rld']
+    True
 
-    >>> sorted(map(FoldedCase, ['GAMMA', 'alpha', 'Beta']))
-    [u'alpha', u'Beta', u'GAMMA']
+    >>> in_order = sorted(map(FoldedCase, ['GAMMA', 'alpha', 'Beta']))
+    >>> in_order == ['alpha', 'Beta', 'GAMMA']
+    True
 
     It's still possible to compare against non-FoldedCase dicts
     >>> s == None
@@ -67,8 +70,8 @@ class IRCFoldedCase(FoldedCase):
     A version of FoldedCase that honors the IRC specification for lowercased
     strings (RFC 1459).
 
-    >>> IRCFoldedCase('Foo^').lower()
-    u'foo~'
+    >>> IRCFoldedCase('Foo^').lower() == 'foo~'
+    True
     >>> IRCFoldedCase('[this]') == IRCFoldedCase('{THIS}')
     True
     """

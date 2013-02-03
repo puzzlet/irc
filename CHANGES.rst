@@ -1,3 +1,156 @@
+Changes
+-------
+
+8.0
+===
+
+This release brings several backward-incompatible changes to the scheduled
+commands.
+
+* Refactored implementation of schedule classes. No longer do they override
+  the datetime constructor, but now only provide suitable classmethods for
+  construction in various forms.
+* Removed backward-compatible references from irc.client.
+* Remove 'arguments' parameter from scheduled commands.
+
+Clients that reference the schedule classes from irc.client or that construct
+them from the basic constructor will need to update to use the new class
+methods::
+
+  - DelayedCommand -> DelayedCommand.after
+  - PeriodicCommand -> PeriodicCommand.after
+
+Arguments may no longer be passed to the 'function' callback, but one is
+encouraged instead to use functools.partial to attach parameters to the
+callback. For example::
+
+    DelayedCommand.after(3, func, ('a', 10))
+
+becomes::
+
+    func = functools.partial(func, 'a', 10)
+    DelayedCommand.after(3, func)
+
+This mode puts less constraints on the both the handler and the caller. For
+example, a caller can now pass keyword arguments instead::
+
+    func = functools.partial(func, name='a', quantity=10)
+    DelayedCommand.after(3, func)
+
+Readability, maintainability, and usability go up.
+
+7.1.2
+=====
+
+* Issue #13: TypeError on Python 3 when constructing PeriodicCommand (and thus
+  execute_every).
+
+7.1.1
+=====
+
+* Fixed regression created in 7.0 where PeriodicCommandFixedDelay would only
+  cause the first command to be scheduled, but not subsequent ones.
+
+7.1
+===
+
+* Moved scheduled command classes to irc.schedule module. Kept references for
+  backwards-compatibility.
+
+7.0
+===
+
+* PeriodicCommand now raises a ValueError if it's created with a negative or
+  zero delay (meaning all subsequent commands are immediately due). This fixes
+  #12.
+* Renamed the parameters to the IRC object. If you use a custom event loop
+  and your code constructs the IRC object with keyword parameters, you will
+  need to update your code to use the new names, so::
+
+    IRC(fn_to_add_socket=adder, fn_to_remove_socket=remover, fn_to_add_timeout=timeout)
+
+  becomes::
+
+    IRC(on_connect=adder, on_disconnect=remover, on_schedule=timeout)
+
+  If you don't use a custom event loop or you pass the parameters
+  positionally, no change is necessary.
+
+6.0.1
+=====
+
+* Fixed some unhandled exceptions in server client connections when the client
+  would disconnect in response to messages sent after select was called.
+
+6.0
+===
+
+* Moved `LineBuffer` and `DecodingLineBuffer` from client to buffer module.
+  Backward-compatible references have been kept for now.
+* Removed daemon mode and log-to-file options for server.
+* Miscellaneous bugfixes in server.
+
+5.1.1
+=====
+
+* Fix error in 2to3 conversion on irc/server.py (issue #11).
+
+5.1
+===
+
+The IRC library is now licensed under the MIT license.
+
+* Added irc/server.py, based on hircd by Ferry Boender.
+* Added support for CAP command (pull request #10), thanks to Danneh Oaks.
+
+5.0
+===
+
+Another backward-incompatible change. In irc 5.0, many of the unnecessary
+getter functions have been removed and replaced with simple attributes. This
+change addresses issue #2. In particular:
+
+ - Connection._get_socket() -> Connection.socket (including subclasses)
+ - Event.eventtype() -> Event.type
+ - Event.source() -> Event.source
+ - Event.target() -> Event.target
+ - Event.arguments() -> Event.arguments
+
+The `nm_to_*` functions were removed. Instead, use the NickMask class
+attributes.
+
+These deprecated function aliases were removed from irc.client::
+
+ - parse_nick_modes -> modes.parse_nick_modes
+ - parse_channel_modes -> modes.parse_channel_modes
+ - generated_events -> events.generated
+ - protocol_events -> events.protocol
+ - numeric_events -> events.numeric
+ - all_events -> events.all
+ - irc_lower -> strings.lower
+
+Also, the parameter name when constructing an event was renamed from
+`eventtype` to simply `type`.
+
+4.0
+===
+
+* Removed deprecated arguments to ServerConnection.connect. See notes on the
+  3.3 release on how to use the connect_factory parameter if your application
+  requires ssl, ipv6, or other connection customization.
+
+3.6.1
+=====
+
+* Filter out disconnected sockets when processing input.
+
+3.6
+===
+
+* Created two new exceptions in `irc.client`: `MessageTooLong` and
+  `InvalidCharacters`.
+* Use explicit exceptions instead of ValueError when sending data.
+
 3.5
 ===
 

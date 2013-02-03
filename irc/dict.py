@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 from . import strings
+from . import _py2_compat
 
 # from jaraco.util.dictlib
 class KeyTransformingDict(dict):
@@ -52,31 +53,31 @@ class IRCDict(KeyTransformingDict):
     >>> d = IRCDict({'[This]': 'that'}, A='foo')
 
     The dict maintains the original case:
-    >>> d.keys()
-    [u'A', u'[This]']
+    >>> '[This]' in ''.join(d.keys())
+    True
 
     But the keys can be referenced with a different case
-    >>> d['a']
-    u'foo'
+    >>> d['a'] == 'foo'
+    True
 
-    >>> d['{this}']
-    u'that'
+    >>> d['{this}'] == 'that'
+    True
 
-    >>> d['{THIS}']
-    u'that'
+    >>> d['{THIS}'] == 'that'
+    True
 
     >>> '{thiS]' in d
     True
 
     This should work for operations like delete and pop as well.
-    >>> d.pop('A')
-    u'foo'
+    >>> d.pop('A') == 'foo'
+    True
     >>> del d['{This}']
     >>> len(d)
     0
     """
     @staticmethod
     def key_transform(key):
-        if isinstance(key, basestring):
+        if isinstance(key, _py2_compat.basestring):
             key = strings.IRCFoldedCase(key)
         return key

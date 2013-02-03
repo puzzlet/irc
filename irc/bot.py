@@ -2,22 +2,6 @@
 
 # Copyright (C) 1999-2002  Joel Rosdahl
 # Portions Copyright © 2011-2012 Jason R. Coombs
-#
-# This library is free software; you can redistribute it and/or
-# modify it under the terms of the GNU Lesser General Public
-# License as published by the Free Software Foundation; either
-# version 2.1 of the License, or (at your option) any later version.
-#
-# This library is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public
-# License along with this library; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
-#
-# Joel Rosdahl <joel@rosdahl.net>
 
 """
 Simple IRC bot library.
@@ -34,6 +18,26 @@ import irc.client
 import irc.modes
 from .dict import IRCDict
 
+class ServerSpec(object):
+    """
+    An IRC server specification.
+
+    >>> spec = ServerSpec('localhost')
+    >>> spec.host
+    'localhost'
+    >>> spec.port
+    6667
+    >>> spec.password
+
+    >>> spec = ServerSpec('127.0.0.1', 6697, 'fooP455')
+    >>> spec.password
+    'fooP455'
+    """
+    def __init__(self, host, port=6667, password=None):
+        self.host = host
+        self.port = port
+        self.password = password
+
 class SingleServerIRCBot(irc.client.SimpleIRCClient):
     """A single-server IRC bot class.
 
@@ -44,15 +48,16 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
     have operator or voice modes.  The "database" is kept in the
     self.channels attribute, which is an IRCDict of Channels.
     """
-    def __init__(self, server_list, nickname, realname, reconnection_interval=60,
-            **connect_params):
+    def __init__(self, server_list, nickname, realname,
+            reconnection_interval=60, **connect_params):
         """Constructor for SingleServerIRCBot objects.
 
         Arguments:
 
-            server_list -- A list of tuples (server, port) that
-                           defines which servers the bot should try to
-                           connect to.
+            server_list -- A list of ServerSpec objects or tuples of
+                           parameters suitable for constructing ServerSpec
+                           objects. Defines the list of servers the bot will
+                           use (in order).
 
             nickname -- The bot's nickname.
 
@@ -71,7 +76,16 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
         super(SingleServerIRCBot, self).__init__()
         self.__connect_params = connect_params
         self.channels = IRCDict()
-        self.server_list = server_list
+        self.server_list = [
+            ServerSpec(*server)
+                if isinstance(server, (tuple, list))
+                else server
+            for server in server_list
+        ]
+        assert all(
+            isinstance(server, ServerSpec)
+            for server in self.server_list
+        )
         if not reconnection_interval or reconnection_interval < 0:
             reconnection_interval = 2 ** 31
         self.reconnection_interval = reconnection_interval
@@ -80,9 +94,8 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
         self._realname = realname
         for i in ["disconnect", "join", "kick", "mode",
                   "namreply", "nick", "part", "quit"]:
-            self.connection.add_global_handler(i,
-                                               getattr(self, "_on_" + i),
-                                               -20)
+            self.connection.add_global_handler(i, getattr(self, "_on_" + i),
+                -20)
 
     def _connected_checker(self):
         """[Internal]"""
@@ -92,18 +105,14 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
             self.jump_server()
 
     def _connect(self):
-        """[Internal]"""
-        password = None
-        if len(self.server_list[0]) > 2:
-            password = self.server_list[0][2]
+        """
+        Establish a connection to the server at the front of the server_list.
+        """
+        server = self.server_list[0]
         try:
-            self.connect(self.server_list[0][0],
-                         self.server_list[0][1],
-                         self._nickname,
-                         password,
-                         ircname=self._realname,
-                         **self.__connect_params
-            )
+            self.connect(server.host, server.port, self._nickname,
+                server.password, ircname=self._realname,
+                **self.__connect_params)
         except irc.client.ServerConnectionError:
             pass
 
@@ -113,15 +122,15 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
                                         self._connected_checker)
 
     def _on_join(self, c, e):
-        ch = e.target()
-        nick = e.source().nick
+        ch = e.target
+        nick = e.source.nick
         if nick == c.get_nickname():
             self.channels[ch] = Channel()
         self.channels[ch].add_user(nick)
 
     def _on_kick(self, c, e):
-        nick = e.arguments()[0]
-        channel = e.target()
+        nick = e.arguments[0]
+        channel = e.target
 
         if nick == c.get_nickname():
             del self.channels[channel]
@@ -129,8 +138,8 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
             self.channels[channel].remove_user(nick)
 
     def _on_mode(self, c, e):
-        modes = irc.modes.parse_channel_modes(" ".join(e.arguments()))
-        t = e.target()
+        modes = irc.modes.parse_channel_modes(" ".join(e.arguments))
+        t = e.target
         if irc.client.is_channel(t):
             ch = self.channels[t]
             for mode in modes:
@@ -144,14 +153,14 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
             pass
 
     def _on_namreply(self, c, e):
-        # e.arguments()[0] == "@" for secret channels,
+        # e.arguments[0] == "@" for secret channels,
         #                     "*" for private channels,
         #                     "=" for others (public channels)
-        # e.arguments()[1] == channel
-        # e.arguments()[2] == nick list
+        # e.arguments[1] == channel
+        # e.arguments[2] == nick list
 
-        ch = e.arguments()[1]
-        for nick in e.arguments()[2].split():
+        ch = e.arguments[1]
+        for nick in e.arguments[2].split():
             if nick[0] == "@":
                 nick = nick[1:]
                 self.channels[ch].set_mode("o", nick)
@@ -161,15 +170,15 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
             self.channels[ch].add_user(nick)
 
     def _on_nick(self, c, e):
-        before = e.source().nick
-        after = e.target()
+        before = e.source.nick
+        after = e.target
         for ch in self.channels.values():
             if ch.has_user(before):
                 ch.change_nick(before, after)
 
     def _on_part(self, c, e):
-        nick = e.source().nick
-        channel = e.target()
+        nick = e.source.nick
+        channel = e.target
 
         if nick == c.get_nickname():
             del self.channels[channel]
@@ -177,7 +186,7 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
             self.channels[channel].remove_user(nick)
 
     def _on_quit(self, c, e):
-        nick = e.source().nick
+        nick = e.source.nick
         for ch in self.channels.values():
             if ch.has_user(nick):
                 ch.remove_user(nick)
@@ -209,7 +218,8 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
 
         Used when answering a CTCP VERSION request.
         """
-        return "Python irc.bot (part of irc)"
+        version='.'.join(irc.client.VERSION) or 'unknown'
+        return "Python irc.bot ({version})".format(version=version)
 
     def jump_server(self, msg="Changing servers"):
         """Connect to a new server, possibly disconnecting from the current.
@@ -229,13 +239,13 @@ class SingleServerIRCBot(irc.client.SimpleIRCClient):
         Replies to VERSION and PING requests and relays DCC requests
         to the on_dccchat method.
         """
-        nick = e.source().nick
-        if e.arguments()[0] == "VERSION":
+        nick = e.source.nick
+        if e.arguments[0] == "VERSION":
             c.ctcp_reply(nick, "VERSION " + self.get_version())
-        elif e.arguments()[0] == "PING":
-            if len(e.arguments()) > 1:
-                c.ctcp_reply(nick, "PING " + e.arguments()[1])
-        elif e.arguments()[0] == "DCC" and e.arguments()[1].split(" ", 1)[0] == "CHAT":
+        elif e.arguments[0] == "PING":
+            if len(e.arguments) > 1:
+                c.ctcp_reply(nick, "PING " + e.arguments[1])
+        elif e.arguments[0] == "DCC" and e.arguments[1].split(" ", 1)[0] == "CHAT":
             self.on_dccchat(c, e)
 
     def on_dccchat(self, c, e):

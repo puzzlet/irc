@@ -114,6 +114,7 @@ numeric = {
     "406": "wasnosuchnick",
     "407": "toomanytargets",
     "409": "noorigin",
+    "410": "invalidcapcmd",
     "411": "norecipient",
     "412": "notexttosend",
     "413": "notoplevel",
@@ -160,6 +161,8 @@ numeric = {
     "502": "usersdontmatch",
 }
 
+codes = dict((v, k) for k, v in numeric.items())
+
 generated = [
     "dcc_connect",
     "dcc_disconnect",
@@ -188,4 +191,4 @@ protocol = [
     "nick",
 ]
 
-all = generated + protocol + numeric.values()
+all = generated + protocol + list(numeric.values())

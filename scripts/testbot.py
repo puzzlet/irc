@@ -26,7 +26,8 @@ The known commands are:
 """
 
 import irc.bot
-from irc.client import irc_lower, ip_numstr_to_quad, ip_quad_to_numstr
+import irc.strings
+from irc.client import ip_numstr_to_quad, ip_quad_to_numstr
 
 class TestBot(irc.bot.SingleServerIRCBot):
     def __init__(self, channel, nickname, server, port=6667):
@@ -40,21 +41,21 @@ class TestBot(irc.bot.SingleServerIRCBot):
         c.join(self.channel)
 
     def on_privmsg(self, c, e):
-        self.do_command(e, e.arguments()[0])
+        self.do_command(e, e.arguments[0])
 
     def on_pubmsg(self, c, e):
-        a = e.arguments()[0].split(":", 1)
-        if len(a) > 1 and irc_lower(a[0]) == irc_lower(self.connection.get_nickname()):
+        a = e.arguments[0].split(":", 1)
+        if len(a) > 1 and irc.strings.lower(a[0]) == irc.strings.lower(self.connection.get_nickname()):
             self.do_command(e, a[1].strip())
         return
 
     def on_dccmsg(self, c, e):
-        c.privmsg("You said: " + e.arguments()[0])
+        c.privmsg("You said: " + e.arguments[0])
 
     def on_dccchat(self, c, e):
-        if len(e.arguments()) != 2:
+        if len(e.arguments) != 2:
             return
-        args = e.arguments()[1].split()
+        args = e.arguments[1].split()
         if len(args) == 4:
             try:
                 address = ip_numstr_to_quad(args[2])
@@ -64,7 +65,7 @@ class TestBot(irc.bot.SingleServerIRCBot):
             self.dcc_connect(address, port)
 
     def do_command(self, e, cmd):
-        nick = e.source().nick
+        nick = e.source.nick
         c = self.connection
 
         if cmd == "disconnect":
