@@ -560,6 +560,8 @@ class ServerConnection(Connection):
                                      None,
                                      [line]))
 
+            if not isinstance(line, str):
+                line = line.decode('utf-8', 'ignore')  # XXX
             m = _rfc_1459_command_regexp.match(line)
             if m.group("prefix"):
                 prefix = m.group("prefix")
