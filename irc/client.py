@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Copyright (C) 1999-2002  Joel Rosdahl
-# Copyright © 2011-2012 Jason R. Coombs
+# Copyright © 2011-2013 Jason R. Coombs
 
 """
 Internet Relay Chat (IRC) protocol client library.
@@ -47,7 +47,7 @@ Current limitations:
 .. [IRC specifications] http://www.irchelp.org/irchelp/rfc/
 """
 
-from __future__ import absolute_import
+from __future__ import absolute_import, division
 
 import bisect
 import re
@@ -57,11 +57,11 @@ import string
 import time
 import struct
 import logging
-import itertools
 import threading
 import abc
 import collections
 import functools
+import itertools
 
 try:
     import pkg_resources
@@ -75,6 +75,7 @@ from . import strings
 from . import util
 from . import buffer
 from . import schedule
+from . import features
 
 log = logging.getLogger(__name__)
 
@@ -108,8 +109,11 @@ class InvalidCharacters(ValueError):
 class MessageTooLong(ValueError):
     "Message is too long"
 
-PrioritizedHandler = collections.namedtuple('PrioritizedHandler',
-    ('priority', 'callback'))
+class PrioritizedHandler(
+        collections.namedtuple('Base', ('priority', 'callback'))):
+    def __lt__(self, other):
+        "when sorting prioritized handlers, only use the priority"
+        return self.priority < other.priority
 
 class IRC(object):
     """Class that handles one or several IRC server connections.
@@ -435,6 +439,7 @@ class ServerConnection(Connection):
     def __init__(self, irclibobj):
         super(ServerConnection, self).__init__(irclibobj)
         self.connected = False
+        self.features = features.FeatureSet()
 
     # save the method args to allow for easier reconnection.
     @irc_functools.save_method_args
@@ -587,6 +592,8 @@ class ServerConnection(Connection):
                 # Record the nickname in case the client changed nick
                 # in a nicknameinuse callback.
                 self.real_nickname = arguments[0]
+            elif command == "featurelist":
+                self.features.load(arguments)
 
             if command in ["privmsg", "notice"]:
                 target, message = arguments[0], arguments[1]
@@ -938,6 +945,44 @@ class ServerConnection(Connection):
         self.send_raw("WHOWAS %s%s%s" % (nick,
                                          max and (" " + max),
                                          server and (" " + server)))
+
+    def set_rate_limit(self, frequency):
+        """
+        Set a `frequency` limit (messages per second) for this connection.
+        Any attempts to send faster than this rate will block.
+        """
+        self.send_raw = Throttler(self.send_raw, frequency)
+
+    def set_keepalive(self, interval):
+        """
+        Set a keepalive to occur every ``interval`` on this connection.
+        """
+        pinger = functools.partial(self.ping, 'keep-alive')
+        self.irclibobj.execute_every(period=interval, function=pinger)
+
+
+class Throttler(object):
+    """
+    Rate-limit a function (or other callable)
+    """
+    def __init__(self, func, max_rate=float('Inf')):
+        if isinstance(func, Throttler):
+            func = func.func
+        self.func = func
+        self.max_rate = max_rate
+        self.reset()
+
+    def reset(self):
+        self.last_called = 0
+
+    def __call__(self, *args, **kwargs):
+        # ensure at least 1/max_rate seconds from last call
+        elapsed = time.time() - self.last_called
+        must_wait = 1 / self.max_rate - elapsed
+        time.sleep(max(0, must_wait))
+        self.last_called = time.time()
+        return self.func(*args, **kwargs)
+
 
 class DCCConnectionError(IRCError):
     pass
@@ -1314,6 +1359,20 @@ def ip_quad_to_numstr(quad):
 class NickMask(str):
     """
     A nickmask (the source of an Event)
+
+    >>> nm = NickMask('pinky!username@example.com')
+    >>> nm.nick
+    'pinky'
+
+    >>> nm.host
+    'example.com'
+
+    >>> nm.user
+    'username'
+
+    >>> import six
+    >>> isinstance(nm, six.string_types)
+    True
     """
     @classmethod
     def from_params(cls, nick, user, host):
@@ -1333,7 +1392,7 @@ class NickMask(str):
 
     @property
     def user(self):
-        return self.userhost.split("@"[0])
+        return self.userhost.split("@")[0]
 
 def _ping_ponger(connection, event):
     "A global handler for the 'ping' event"

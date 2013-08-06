@@ -1,18 +1,18 @@
 #! /usr/bin/env python
 #
-# Example program using irc.client.
+# Example program using irc.client for SSL connections.
 #
 # This program is free without restrictions; do anything you like with
 # it.
 #
-# Joel Rosdahl <joel@rosdahl.net>
+# Jason R. Coombs <jaraco@jaraco.com>
 
 import sys
+import ssl
 import argparse
 import itertools
 
 import irc.client
-import irc.logging
 
 target = None
 "The nick or channel to which to send messages"
@@ -45,19 +45,23 @@ def get_args():
     parser.add_argument('nickname')
     parser.add_argument('target', help="a nickname or channel")
     parser.add_argument('-p', '--port', default=6667, type=int)
-    irc.logging.add_arguments(parser)
     return parser.parse_args()
 
 def main():
     global target
 
     args = get_args()
-    irc.logging.setup(args)
     target = args.target
 
+    ssl_factory = irc.connection.Factory(ssl.wrap_socket)
     client = irc.client.IRC()
     try:
-        c = client.server().connect(args.server, args.port, args.nickname)
+        c = client.server().connect(
+            args.server,
+            args.port,
+            args.nickname,
+            connect_factory=ssl_factory,
+        )
     except irc.client.ServerConnectionError:
         print(sys.exc_info()[1])
         raise SystemExit(1)

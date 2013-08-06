@@ -1,6 +1,67 @@
 Changes
 -------
 
+8.4
+===
+
+* Code base now runs natively on Python 2 and Python 3, but requires `six
+  <https://pypi.python.org/pypi/six>`_ to be installed.
+* Issue #25: Rate-limiting has been updated to be finer grained (preventing
+  bursts exceeding the limit following idle periods).
+
+8.3.2
+=====
+
+* Issue #22: Catch error in bot.py on NAMREPLY when nick is not in any visible
+  channel.
+
+8.3.1
+=====
+
+* Fixed encoding errors in server on Python 3.
+
+8.3
+===
+
+* Added a ``set_keepalive`` method to the ServerConnection. Sends a periodic
+  PING message every indicated interval.
+
+8.2
+===
+
+* Added support for throttling send_raw messages via the ServerConnection
+  object. For example, on any connection object:
+
+    connection.set_rate_limit(30)
+
+  That would set the rate limit to 30 Hz (30 per second). Thanks to Jason
+  Kendall for the suggestion and bug fixes.
+
+8.1.2
+=====
+
+* Fix typo in `client.NickMask`.
+
+8.1.1
+=====
+
+* Fix typo in bot.py.
+
+8.1
+===
+
+* Issue #15: Added client support for ISUPPORT directives on server
+  connections. Now, each ServerConnection has a `features` attribute which
+  reflects the features supported by the server. See the docs for
+  `irc.features` for details about the implementation.
+
+8.0.1
+=====
+
+* Issue #14: Fix errors when handlers of the same priority are added under
+  Python 3. This also fixes the unintended behavior of allowing handlers of
+  the same priority to compare as unequal.
+
 8.0
 ===
 
