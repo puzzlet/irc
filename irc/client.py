@@ -62,6 +62,7 @@ import abc
 import collections
 import functools
 import itertools
+import six
 
 try:
     import pkg_resources
@@ -565,7 +566,7 @@ class ServerConnection(Connection):
                                      None,
                                      [line]))
 
-            if not isinstance(line, str):
+            if not isinstance(line, six.text_type):
                 line = line.decode('utf-8', 'ignore')  # XXX
             m = _rfc_1459_command_regexp.match(line)
             if m.group("prefix"):
