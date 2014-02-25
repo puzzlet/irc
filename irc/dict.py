@@ -80,5 +80,5 @@ class IRCDict(KeyTransformingDict):
     @staticmethod
     def key_transform(key):
         if isinstance(key, six.string_types):
-            key = strings.IRCFoldedCase(key)
+            key = strings.IRCFoldedCase(key, errors='ignore')
         return key
